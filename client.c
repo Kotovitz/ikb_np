@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "ikb.h"
+#include "channel.h"
 
 
 /* Оголошуємо основні елементи вікна */
@@ -74,6 +75,7 @@ uint8_t  g_ikb_db_size = 0;
 uint8_t  g_active_ikb_id = 0;
 
 
+#define MAX_MESSAGE_SIZE (256)     /* 256 bytes */
 
 /* Функція для завантаження зображення у буфер даних */
 GdkPixbuf * create_pixbuf(const gchar * filepath)
@@ -138,6 +140,7 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
             sprintf(tx_msg_buffer, "%s " BIN8_FORMAT, tx_msg_buffer, BIN8_NUMBER(code_p[i]));
         }
         sprintf(tx_msg_buffer, "%s%c", tx_msg_buffer, '\0');
+        channel_write(-1, code_size, (uint8_t *)code_p);
         //g_printf("MSG: %s\n", tx_msg_buffer);
 
         tx_buffer = gtk_text_view_get_buffer(tx_text_view);
@@ -164,11 +167,14 @@ exit:
 /* Функція для оновлення довжини введених повідомлень */
 void update_msg_data_cb(GtkWidget *widget, gpointer window)
 {
-    status_code_t status = SC_OK;
     gchararray    buffer_p = NULL;
 
     buffer_p = calloc(1, 100);
-    sprintf(buffer_p, "Знаків використано: %3d", strlen(gtk_entry_get_text((GtkEntry *)msg_entry)));
+    if (buffer_p == NULL) {
+        goto exit;
+    }
+
+    sprintf(buffer_p, "Знаків використано: %3lu", strlen(gtk_entry_get_text((GtkEntry *)msg_entry)));
     gtk_label_set_text(msg_len_label, buffer_p);
 
 exit:
@@ -352,13 +358,15 @@ exit:
     return status;
 }
 
-status_code_t gui_init()
+status_code_t gui_init(int32_t client_id)
 {
-    int i = 0;
+    int  i = 0;
+    char window_name[50] = {0};
 
     /* Створюємо та налаштовуємо головне вікно */
     window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(window), "IKB Noise Protection");
+    sprintf(window_name, "IKB Noise Protection - Client #%d", client_id);
+    gtk_window_set_title(GTK_WINDOW(window), window_name);
     gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
     gtk_window_set_default_size(GTK_WINDOW(window), 600, 800);
     gtk_container_set_border_width(GTK_CONTAINER(window), 10);
@@ -460,7 +468,7 @@ status_code_t gui_init()
 
     msg_layout = GTK_BOX(gtk_box_new(GTK_ORIENTATION_VERTICAL, 10));
     msg_entry = GTK_ENTRY(gtk_entry_new());
-    gtk_entry_set_max_length(msg_entry, 255);
+    gtk_entry_set_max_length(msg_entry, MAX_MESSAGE_SIZE);
     gtk_widget_set_hexpand(GTK_WIDGET(msg_entry), TRUE);
     gtk_container_add(GTK_CONTAINER(msg_layout), GTK_WIDGET(msg_entry));
 
@@ -539,19 +547,81 @@ status_code_t gui_init()
     return SC_OK;
 }
 
-status_code_t client_init()
+void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
+{
+    uint32_t i = 0;
+
+    g_printf("Received buffer of size %d bytes:\n", buffer_size);
+    for (i = 0; i < buffer_size; i++) {
+        g_printf(" " BIN8_FORMAT, BIN8_NUMBER(buffer_p[i]));
+    }
+    g_printf("\n");
+    return;
+}
+
+status_code_t validate_arguments(int argc, char *argv[])
 {
     status_code_t status = SC_OK;
+
+    /* Перевірка кількості параметрів:
+     * ./program <clid> <dstclid>
+     */
+    if (argc != 3) {
+        g_printf("Неправильна кількість параметрів. Вкажіть номер клієнта та отримувача.\n");
+        status = SC_PARAM_VALUE_INVALID;
+        goto exit;
+    }
+
+exit:
+    return status;
+}
+
+status_code_t client_init(int argc, char *argv[])
+{
+    status_code_t status = SC_OK;
+    int32_t       client_id = 0;
+    int32_t       dst_client_id = 0;
+    char         *shmem_path = CHANNEL_ID;
+    size_t        shmem_size = strlen(shmem_path);
+
+    /* Перевіряємо вхідні параметри на правильність */
+    status = validate_arguments(argc, argv);
+    if (CHECK_STATUS_FAIL(status)) {
+        LOG_ERR("Ініціалізація клієнта завершилась помилкою: %s", status_get_str(status));
+        goto exit;
+    }
+
+    /* Зчитуємо ідентифікатор клієнта */
+    client_id = atoi(argv[1]);
+    if (client_id < 0 || client_id >= MAX_CLIENTS_NUM) {
+        g_printf("Недопустиме значення номера клієнта: %d", client_id);
+        status = SC_PARAM_VALUE_INVALID;
+        goto exit;
+    }
+
+    dst_client_id = atoi(argv[2]);
+    if (dst_client_id < 0 || dst_client_id >= MAX_CLIENTS_NUM) {
+        g_printf("Недопустиме значення номера отримувача: %d", dst_client_id);
+        status = SC_PARAM_VALUE_INVALID;
+        goto exit;
+    }
+
+    /* Ініціалізуємо коди ІКВ */
+    status = channel_init(client_id, dst_client_id, shmem_size, shmem_path, rx_reader);
+    if (CHECK_STATUS_FAIL(status)) {
+        LOG_ERR("Ініціалізація каналу завершилась помилкою: %s", status_get_str(status));
+        goto exit;
+    }
 
     /* Ініціалізуємо коди ІКВ */
     status = ikb_codes_init();
     if (CHECK_STATUS_FAIL(status)) {
-        LOG_ERR("Ініціалізація ІКВ завершилась помлкою: %s", status_get_str(status));
+        LOG_ERR("Ініціалізація ІКВ завершилась помилкою: %s", status_get_str(status));
         goto exit;
     }
 
     /* Ініціалізуємо графічний інтерфейс */
-    status = gui_init();
+    status = gui_init(client_id);
     if (CHECK_STATUS_FAIL(status)) {
         LOG_ERR("Ініціалізація графічної оболонки завершилась помилкою: %s", status_get_str(status));
         goto exit;
@@ -579,7 +649,19 @@ void bin_macro_test()
     g_printf(" BIN16_TEST |  18: " BIN16_FORMAT "\n", BIN16_NUMBER(18));
 }
 
-/* TODO: client de-init */
+void __attribute__ ((destructor)) client_deinit()
+{
+    status_code_t status = SC_OK;
+
+    status = channel_deinit();
+    if (CHECK_STATUS_FAIL(status)) {
+        LOG_ERR("Де-ініціалізація каналу завершилась помлкою: %s", status_get_str(status));
+        goto exit;
+    }
+
+exit:
+    return;
+}
 
 /* Основна функція програми */
 int main(int argc, char *argv[])
@@ -588,12 +670,10 @@ int main(int argc, char *argv[])
     gtk_init(&argc, &argv);
 
     /* Ініціалізація */
-    client_init();
+    client_init(argc, argv);
 
     /* Передаємо керування в GTK */
     gtk_main();
-
-    /* Де-ініціалізація */
 
     return 0;
 }

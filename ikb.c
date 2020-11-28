@@ -261,7 +261,7 @@ status_code_t ikb_encode(const ikb_t *ikb_p,
                 //g_printf(" BitMask: " BIN8_FORMAT "; BitValue: %d; ChipBit: %d;\n", BIN8_NUMBER(code_bit_mask), code_bit_value, chip_bit_i);
             }
 
-            uint32_t i = 0;
+            //uint32_t i = 0;
             /*g_printf ("Chip ID: %d; Chip unit: " BIN32_FORMAT " (%d); Chip code:", chip_id, BIN32_NUMBER(chip_unit), chip_unit);
             for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
                 g_printf(" " BIN8_FORMAT, BIN8_NUMBER(chip_code_p[i]));

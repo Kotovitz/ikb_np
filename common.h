@@ -4,9 +4,9 @@
 
 /** Boolean values type */
 typedef enum {
-    FALSE = 0,      /**< False condition*/
-    TRUE  = 1,      /**< True condition */
-    SEMITRUE = 2,   /**< Semitrue condition */
+    FALSE_E = 0,      /**< False condition*/
+    TRUE_E  = 1,      /**< True condition */
+    SEMITRUE_E = 2,   /**< Semitrue condition */
 } bool_t;
 
 
