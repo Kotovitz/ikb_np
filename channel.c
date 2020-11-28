@@ -141,6 +141,7 @@ status_code_t channel_deinit()
     int               res = 0, fd = 0;
     channel_header_t *ch_header_p = NULL;
     client_header_t  *client_p = NULL;
+    bool_t            close_shmem = FALSE;
 
     /* Stop polling thread */
     channel_g.polling = FALSE;
@@ -149,6 +150,9 @@ status_code_t channel_deinit()
     /* Update channel header */
     ch_header_p = (channel_header_t *)channel_g.stream;
     ch_header_p->clients_attached--;
+    if (ch_header_p->clients_attached == 0) {
+        close_shmem = TRUE;
+    }
 
     /* Deinitialize client header */
     client_p = CLIENT_HEADER(ch_header_p, channel_g.client_id);
@@ -165,13 +169,15 @@ status_code_t channel_deinit()
         goto exit;
 	}
 
-	/* shm_open cleanup */
-	fd = shm_unlink(channel_g.shmem_path);
-	if (fd == -1) {
-		perror("Помилка завершення зв'язку із спільною пам'яттю\n");
-		status = SC_UNKNOWN_ERROR;
-        goto exit;
-	}
+    if (close_shmem) {
+        /* shm_open cleanup */
+        fd = shm_unlink(channel_g.shmem_path);
+        if (fd == -1) {
+            perror("Помилка завершення зв'язку із спільною пам'яттю\n");
+            status = SC_UNKNOWN_ERROR;
+            goto exit;
+        }
+    }
 
     /* De-initialize channel metadata */
     channel_g.shmem_size = 0;

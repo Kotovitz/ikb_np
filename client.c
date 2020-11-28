@@ -655,9 +655,11 @@ void __attribute__ ((destructor)) client_deinit()
 
     status = channel_deinit();
     if (CHECK_STATUS_FAIL(status)) {
-        LOG_ERR("Де-ініціалізація каналу завершилась помлкою: %s", status_get_str(status));
+        g_printf("Де-ініціалізація каналу завершилась помлкою: %s", status_get_str(status));
         goto exit;
     }
+
+    g_printf("Де-ініціалізацію клієнта завершено.\n");
 
 exit:
     return;
