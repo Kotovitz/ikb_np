@@ -180,6 +180,17 @@ exit:
     return;
 }
 
+/* Іункція виконує оновлення вхідного буфера з потоку графічного інтерфейсу */
+int rx_buffer_update(void *data_arg)
+{
+    rx_update_t * data = (rx_update_t *)data_arg;
+
+    gtk_text_buffer_set_text(data->buffer_p, data->message_p, strlen(data->message_p));
+    g_free(data);
+
+    return 0;
+}
+
 /* Функція для обробки отриманих повідомлень */
 void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
 {
@@ -189,6 +200,7 @@ void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
     uint8_t       message_size = 0;
     uint32_t      rx_msg_size = 0;
     gchararray    rx_msg_buffer = NULL;
+    rx_update_t  *data = g_new0(rx_update_t, 1);
 
     g_printf("Отримано буфер даних розміром %d байт:\n", buffer_size);
     for (i = 0; i < buffer_size; i++) {
@@ -229,9 +241,13 @@ void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
         sprintf(rx_msg_buffer, "%s\n <Розкодовано> %s", rx_msg_buffer, message_p);
         //g_printf("MSG: %s\n", rx_msg_buffer);
 
-        rx_buffer = gtk_text_view_get_buffer(rx_text_view);
+        //Invalid code: rx_buffer = gtk_text_view_get_buffer(rx_text_view);
         //g_printf("Setting buffer to tx_buffer [%p] of %lu bytes\n", tx_buffer, strlen(rx_msg_buffer));
-        gtk_text_buffer_set_text(rx_buffer, rx_msg_buffer, strlen(rx_msg_buffer));
+        //Invalid code: gtk_text_buffer_set_text(rx_buffer, rx_msg_buffer, strlen(rx_msg_buffer));
+
+        data->message_p = g_strdup_printf("%s", rx_msg_buffer);
+        data->buffer_p = gtk_text_view_get_buffer(rx_text_view);;
+        gdk_threads_add_idle(rx_buffer_update, data);
     }
 
     g_printf("Отримано.\n");

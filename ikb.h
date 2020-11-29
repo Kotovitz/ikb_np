@@ -63,6 +63,11 @@ typedef struct ikb {
     ikb_enc_table_t enc_table;
 } ikb_t;
 
+typedef struct rx_update {
+    GtkTextBuffer *buffer_p;
+    char          *message_p;
+} rx_update_t;
+
 
 status_code_t ikb_init(uint8_t seq_len, const uint8_t *seq_p, ikb_t *ikb_p);
 status_code_t ikb_deinit(ikb_t *ikb_p);

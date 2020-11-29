@@ -7,6 +7,7 @@
 #include "common.h"
 #include "status.h"
 #include "logger.h"
+#include "ikb.h"
 
 /*
  * Channel communication mechanism

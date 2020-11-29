@@ -441,7 +441,6 @@ exit:
 }
 
 
-
 status_code_t ikb_seq_get_str_size(const ikb_t *ikb_p, uint8_t *buf_size)
 {
     status_code_t status = SC_OK;
