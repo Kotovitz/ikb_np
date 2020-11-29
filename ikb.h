@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "common.h"
 #include "logger.h"
 #include "status.h"
 
@@ -71,7 +72,7 @@ status_code_t ikb_encode(const ikb_t *ikb_p,
                          uint32_t *code_size_p, gchararray code_seq);
 status_code_t ikb_decode(const ikb_t *ikb_p,
                          uint32_t code_size, gchararray code_seq,
-                         uint8_t *msg_size, gchararray message);
+                         uint8_t *msg_size_p, gchararray message);
 
 status_code_t ikb_code_to_str(uint32_t code_size, gchararray code_seq,
                               uint32_t *msg_size, gchararray message);

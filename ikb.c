@@ -198,12 +198,12 @@ status_code_t ikb_encode(const ikb_t *ikb_p,
         goto exit;
     }
 
-    /*g_printf("Encoding MSG (%d bytes): %s", msg_size, message);
+    g_printf("Encoding MSG (%d bytes): %s", msg_size, message);
     uint32_t j = 0;
     for (j = 0; j < msg_size; j++) {
         g_printf(" " BIN8_FORMAT, BIN8_NUMBER(message[j]));
     }
-    g_printf("\n"); */
+    g_printf("\n");
 
     /* Calculate required buffer size
      * ------------------------------------------------------------------
@@ -220,9 +220,9 @@ status_code_t ikb_encode(const ikb_t *ikb_p,
     }
     *code_size_p = chips_buf_sz;
 
-    g_printf("Buffer size required (chip: %db): %d bytes\n", ikb_p->enc_table.code_len_bits, *code_size_p);
+    g_printf("Code buffer size required (chip: %db): %d bytes\n", ikb_p->enc_table.code_len_bits, *code_size_p);
 
-    if (code_seq != NULL) {\
+    if (code_seq != NULL) {
         g_printf("Encoding your message ...\n");
         /* Encode the message using IKB encoding table */
         for (chip_id = 0; chip_id < chips_num; chip_id++) {
@@ -235,8 +235,7 @@ status_code_t ikb_encode(const ikb_t *ikb_p,
             /* Cut the maximum end bit */
             msg_bit_end = (msg_bit_end < (msg_size * BITS_IN_BYTE)) ? msg_bit_end : (msg_size * BITS_IN_BYTE);
 
-
-            //g_printf("Chip from %d to %d bit.\n", msg_bit_start, msg_bit_end);
+            g_printf("Chip from %d to %d bit.\n", msg_bit_start, msg_bit_end);
             for (msg_bit_i = msg_bit_start; msg_bit_i < msg_bit_end; msg_bit_i++) {
                 msg_bit_value = (message[msg_bit_i / BITS_IN_BYTE] & (0x80 >> (msg_bit_i % BITS_IN_BYTE))) ? 1 : 0;
                 chip_unit = (chip_unit << 1) | msg_bit_value;
@@ -251,18 +250,18 @@ status_code_t ikb_encode(const ikb_t *ikb_p,
             uint8_t code_bit_value = 0;
             uint8_t code_bit_mask = 0;
 
-            //g_printf("Code from %d to %d bit.\n", code_bit_start, code_bit_end);
+            g_printf("Code from %d to %d bit.\n", code_bit_start, code_bit_end);
             for (chip_bit_i = code_bit_start; chip_bit_i < code_bit_end; chip_bit_i++) {
                 code_bit_mask = 0x80 >> ((chip_bit_i - code_bit_start) % BITS_IN_BYTE);
                 code_bit_value = (chip_code_p[(chip_bit_i - code_bit_start) / BITS_IN_BYTE] & code_bit_mask) ? 1 : 0;
                 if (code_bit_value) {
                     code_seq[chip_bit_i / BITS_IN_BYTE] |= (0x80 >> (chip_bit_i % BITS_IN_BYTE));
                 }
-                //g_printf(" BitMask: " BIN8_FORMAT "; BitValue: %d; ChipBit: %d;\n", BIN8_NUMBER(code_bit_mask), code_bit_value, chip_bit_i);
+                g_printf(" BitMask: " BIN8_FORMAT "; BitValue: %d; ChipBit: %d;\n", BIN8_NUMBER(code_bit_mask), code_bit_value, chip_bit_i);
             }
 
-            //uint32_t i = 0;
-            /*g_printf ("Chip ID: %d; Chip unit: " BIN32_FORMAT " (%d); Chip code:", chip_id, BIN32_NUMBER(chip_unit), chip_unit);
+            uint32_t i = 0;
+            g_printf ("Chip ID: %d; Chip unit: " BIN32_FORMAT " (%d); Chip code:", chip_id, BIN32_NUMBER(chip_unit), chip_unit);
             for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
                 g_printf(" " BIN8_FORMAT, BIN8_NUMBER(chip_code_p[i]));
             }
@@ -270,11 +269,11 @@ status_code_t ikb_encode(const ikb_t *ikb_p,
             for (i = 0; i < *code_size_p; i++) {
                 g_printf(" " BIN8_FORMAT, BIN8_NUMBER(code_seq[i]));
             }
-            g_printf("\n");*/
+            g_printf("\n");
         }
     }
 
-    /* g_printf("Sum: %d; BE: %d; msg_len: %d; chips: %d; buf_sz: %d;\n", ikb_p->sum, ikb_p->enc_table.encode_ability, msg_size, chips_num, chips_buf_sz); */
+    g_printf("Sum: %d; BE: %d; msg_len: %d; chips: %d; buf_sz: %d;\n", ikb_p->sum, ikb_p->enc_table.encode_ability, msg_size, chips_num, chips_buf_sz);
 
 exit:
     return status;
@@ -283,15 +282,149 @@ exit:
 
 status_code_t ikb_decode(const ikb_t *ikb_p,
                          uint32_t code_size, gchararray code_seq,
-                         uint8_t *msg_size, gchararray message)
+                         uint8_t *msg_size_p, gchararray message)
 {
-    status_code_t status = SC_FLOW_UNSUPPORTED;
+    status_code_t status = SC_OK;
+    uint32_t      chips_num = 0;  /* number of chips used by message */
+    uint32_t      msg_buf_sz = 0;  /* size of the buffer for encoded message */
 
-    if (CHECK_STATUS_FAIL(status)) {
+    uint8_t       chip_id = 0; /* Chip index */
+    uint32_t      msg_bit_i = 0; /* Bit iterator over the message buffer */
+    uint32_t      chip_bit_i = 0; /* Bit iterator over the chips buffer */
+    uint8_t      *chip_code_p = NULL;
+    uint32_t      i = 0;
+
+    /* Check parameters are valid */
+    if (msg_size_p == NULL) {
+        status = SC_PARAM_NULL;
         goto exit;
     }
 
+    /* Check if IKB can be used for encoding */
+    if (ikb_p->enc_table.encode_ability == 0) {
+        g_printf("Неможливо декодувати повідомлення обраною ІКВ.\n");
+        status = SC_PARAM_VALUE_INVALID;
+        goto exit;
+    }
+
+    g_printf("Декодування буфера (%d байт): %s", code_size, code_seq);
+    uint32_t j = 0;
+    for (j = 0; j < code_size; j++) {
+        g_printf(" " BIN8_FORMAT, BIN8_NUMBER(code_seq[j]));
+    }
+    g_printf("\n");
+
+    /* Calculate required buffer size for message
+     * ------------------------------------------------------------------
+     * Message size in bits / Chip size in bits = Chips number
+     * Chips number * Encode ability in bits / Bits in byte = Chips buffer size
+     * ------------------------------------------------------------------
+     */
+    if (code_size > 0) {
+        /* Calculate number of chips needed to encode the data */
+        chips_num = (code_size * BITS_IN_BYTE) / ikb_p->enc_table.code_len_bits;
+
+        /* Calculate number of bytes needed to store all bytes of encoded message */
+        msg_buf_sz = (chips_num * ikb_p->enc_table.encode_ability) / BITS_IN_BYTE;
+    }
+    *msg_size_p = msg_buf_sz;
+
+    g_printf("Необхідний розмір буфера (чіп: %d байт): %d байт\n", ikb_p->enc_table.code_len_bits, *msg_size_p);
+
+    if (message != NULL) {
+        g_printf("Декодуємо повідомлення ...\n");
+        chip_code_p = calloc(1, ikb_p->enc_table.code_len_bytes);
+
+        /* Decode the message using IKB encoding table */
+        for (chip_id = 0; chip_id < chips_num; chip_id++) {
+            // Step 0. Initialization.
+            memset(chip_code_p, 0, ikb_p->enc_table.code_len_bytes);
+
+            // Step 1. Copy the code sequence to the buffer.
+            uint32_t code_bit_start = chip_id * ikb_p->enc_table.code_len_bits;
+            uint32_t code_bit_end = code_bit_start + ikb_p->enc_table.code_len_bits;
+            uint8_t code_bit_value = 0;
+            uint8_t code_bit_mask = 0;
+
+            /* Cut the maximum end bit */
+            code_bit_end = (code_bit_end < (code_size * BITS_IN_BYTE)) ? code_bit_end : (code_size * BITS_IN_BYTE);
+
+            g_printf("Межі коду від %d до %d байту.\n", code_bit_start, code_bit_end);
+            for (chip_bit_i = code_bit_start; chip_bit_i < code_bit_end; chip_bit_i++) {
+                code_bit_mask = 0x80 >> (chip_bit_i % BITS_IN_BYTE);
+                code_bit_value = (code_seq[chip_bit_i / BITS_IN_BYTE] & code_bit_mask) ? 1 : 0;
+
+                if (code_bit_value) {
+                    chip_code_p[(chip_bit_i - code_bit_start) / BITS_IN_BYTE] |= (0x80 >> ((chip_bit_i - code_bit_start) % BITS_IN_BYTE));
+                }
+                g_printf(" BitMask: " BIN8_FORMAT "; BitValue: %d; ChipBit: %d;\n", BIN8_NUMBER(code_bit_mask), code_bit_value, chip_bit_i);
+            }
+
+            // Step 2. Get the encoding unit for the code sequence.
+            int8_t chip_unit = -1;
+            uint8_t code_id = 0;
+
+            for (code_id = 0; code_id < ikb_p->enc_table.codes_num; code_id++) {
+                chip_unit = code_id;
+
+                /* Порівняємо всі байти коду */
+                for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
+                    if (ikb_p->enc_table.codes[code_id][i] != chip_code_p[i]) {
+                        chip_unit = -1;
+                        break;
+                    }
+                }
+
+                /* Якщо коди однакові, ми виходимо */
+                if (chip_unit >= 0) {
+                    break;
+                }
+            }
+
+            if (chip_unit == -1) {
+                /* */
+                g_printf("Помилка декодування чіпа:\n");
+                for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
+                    g_printf(" " BIN8_FORMAT, BIN8_NUMBER(chip_code_p[i]));
+                }
+                g_printf("\n");
+                status = SC_UNKNOWN_ERROR;
+                goto exit;
+            }
+
+            // Step 3. Compound MSG by encoding units.
+            uint32_t msg_bit_start = chip_id * ikb_p->enc_table.encode_ability;
+            uint32_t msg_bit_end = msg_bit_start + ikb_p->enc_table.encode_ability;
+            uint8_t msg_bit_value = 0;
+
+            /* Cut the maximum end bit */
+            msg_bit_end = (msg_bit_end < (*msg_size_p * BITS_IN_BYTE)) ? msg_bit_end : (*msg_size_p * BITS_IN_BYTE);
+
+            g_printf("Chip from %d to %d bit.\n", msg_bit_start, msg_bit_end);
+            for (msg_bit_i = msg_bit_start; msg_bit_i < msg_bit_end; msg_bit_i++) {
+                msg_bit_value = (chip_unit & (0x1 << (msg_bit_end - msg_bit_i - 1))) ? 0x80 : 0; /* Use 0x80 instead of 0x1 to use right shift operator */
+                message[msg_bit_i / BITS_IN_BYTE] |= msg_bit_value >> (msg_bit_i % BITS_IN_BYTE);
+            }
+            g_printf ("Chip ID: %d; Chip unit: " BIN32_FORMAT " (%d); Chip code:", chip_id, BIN32_NUMBER(chip_unit), chip_unit);
+            for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
+                g_printf(" " BIN8_FORMAT, BIN8_NUMBER(chip_code_p[i]));
+            }
+            g_printf("; Message:");
+            for (i = 0; i < *msg_size_p; i++) {
+                g_printf(" " BIN8_FORMAT, BIN8_NUMBER(message[i]));
+            }
+            g_printf("\n");
+        }
+    }
+
+    /* g_printf("Sum: %d; BE: %d; msg_len: %d; chips: %d; buf_sz: %d;\n", ikb_p->sum, ikb_p->enc_table.encode_ability, msg_size, chips_num, chips_buf_sz); */
+
+
 exit:
+    if (chip_code_p != NULL) {
+        free(chip_code_p);
+    }
+
     return status;
 }
 

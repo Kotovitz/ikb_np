@@ -113,7 +113,6 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
     /* Отримаємо необхідний розмір буфера коду в байтах */
     status = ikb_encode(&g_ikb_db[g_active_ikb_id], buffer_size, buffer_p, &code_size, NULL);
     if (CHECK_STATUS_FAIL(status)) {
-        LOG_ERR("Помилка отримання розміру коду: %s\n", status_get_str(status));
         g_printf("Помилка отримання розміру коду: %s <-\n", status_get_str(status));
         goto exit;
     }
@@ -123,11 +122,11 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
 
     status = ikb_encode(&g_ikb_db[g_active_ikb_id], buffer_size, buffer_p, &code_size, code_p);
     if (CHECK_STATUS_FAIL(status)) {
-        LOG_ERR("Помилка кодування повідомлення: %s", status_get_str(status));
+        g_printf("Помилка кодування повідомлення: %s", status_get_str(status));
         goto exit;
     }
 
-    /* Виведемо дані у вікно користувача */
+    /* Виведемо надіслані дані у вікно користувача */
     if (buffer_p) {
         tx_msg_size = buffer_size + (code_size * BITS_IN_BYTE) + 1000;
         tx_msg_buffer = calloc(1, tx_msg_size);
@@ -181,6 +180,65 @@ exit:
     return;
 }
 
+/* Функція для обробки отриманих повідомлень */
+void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
+{
+    status_code_t status = SC_OK;
+    uint32_t      i = 0;
+    gchararray    message_p = NULL;
+    uint8_t       message_size = 0;
+    uint32_t      rx_msg_size = 0;
+    gchararray    rx_msg_buffer = NULL;
+
+    g_printf("Отримано буфер даних розміром %d байт:\n", buffer_size);
+    for (i = 0; i < buffer_size; i++) {
+        g_printf(" " BIN8_FORMAT, BIN8_NUMBER(buffer_p[i]));
+    }
+    g_printf("\n");
+
+    /* Decode buffer accordingly to active IKB */
+    status = ikb_decode(&g_ikb_db[g_active_ikb_id], buffer_size, (gchararray)buffer_p, &message_size, NULL);
+    if (CHECK_STATUS_FAIL(status)) {
+        g_printf("Помилка отримання розміру повідомлення: %s\n", status_get_str(status));
+        goto exit;
+    }
+
+    message_p = calloc(1, message_size + 1);
+    if (message_p == NULL) {
+        status = SC_NO_FREE_MEMORY;
+        g_printf("Помилка виділення пам'яті для повідомлення: %s\n", status_get_str(status));
+        goto exit;
+    }
+
+    status = ikb_decode(&g_ikb_db[g_active_ikb_id], buffer_size, (gchararray)buffer_p, &message_size, message_p);
+    if (CHECK_STATUS_FAIL(status)) {
+        g_printf("Помилка отримання повідомлення: %s\n", status_get_str(status));
+        goto exit;
+    }
+
+    /* Виведемо отримані дані у вікно користувача */
+    if (buffer_p) {
+        rx_msg_size = buffer_size + message_size + 1000;
+        rx_msg_buffer = calloc(1, rx_msg_size);
+
+        sprintf(rx_msg_buffer, " <Отримано>");
+        for (i = 0; i < buffer_size; i++) {
+            sprintf(rx_msg_buffer, "%s " BIN8_FORMAT, rx_msg_buffer, BIN8_NUMBER(buffer_p[i]));
+        }
+        sprintf(rx_msg_buffer, "%s%c", rx_msg_buffer, '\0');
+        sprintf(rx_msg_buffer, "%s\n <Розкодовано> %s", rx_msg_buffer, message_p);
+        //g_printf("MSG: %s\n", rx_msg_buffer);
+
+        rx_buffer = gtk_text_view_get_buffer(rx_text_view);
+        //g_printf("Setting buffer to tx_buffer [%p] of %lu bytes\n", tx_buffer, strlen(rx_msg_buffer));
+        gtk_text_buffer_set_text(rx_buffer, rx_msg_buffer, strlen(rx_msg_buffer));
+    }
+
+    g_printf("Отримано.\n");
+
+exit:
+    return;
+}
 
 /* Function to open a dialog box with a message */
 void quick_message (GtkWindow *parent, gchar *message)
@@ -243,7 +301,6 @@ exit:
 
     return status;
 }
-
 
 void ikb_changed_cb(GtkWidget *widget, gpointer window)
 {
@@ -309,6 +366,23 @@ void show_enc_table_cb(GtkWidget *widget, gpointer window)
 
 exit:
     return;
+}
+
+status_code_t validate_arguments(int argc, char *argv[])
+{
+    status_code_t status = SC_OK;
+
+    /* Перевірка кількості параметрів:
+     * ./program <clid> <dstclid>
+     */
+    if (argc != 3) {
+        g_printf("Неправильна кількість параметрів. Вкажіть номер клієнта та отримувача.\n");
+        status = SC_PARAM_VALUE_INVALID;
+        goto exit;
+    }
+
+exit:
+    return status;
 }
 
 status_code_t ikb_codes_init()
@@ -545,35 +619,6 @@ status_code_t gui_init(int32_t client_id)
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
     return SC_OK;
-}
-
-void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
-{
-    uint32_t i = 0;
-
-    g_printf("Received buffer of size %d bytes:\n", buffer_size);
-    for (i = 0; i < buffer_size; i++) {
-        g_printf(" " BIN8_FORMAT, BIN8_NUMBER(buffer_p[i]));
-    }
-    g_printf("\n");
-    return;
-}
-
-status_code_t validate_arguments(int argc, char *argv[])
-{
-    status_code_t status = SC_OK;
-
-    /* Перевірка кількості параметрів:
-     * ./program <clid> <dstclid>
-     */
-    if (argc != 3) {
-        g_printf("Неправильна кількість параметрів. Вкажіть номер клієнта та отримувача.\n");
-        status = SC_PARAM_VALUE_INVALID;
-        goto exit;
-    }
-
-exit:
-    return status;
 }
 
 status_code_t client_init(int argc, char *argv[])
