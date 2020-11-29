@@ -77,8 +77,8 @@ GUI_ELEMENT_P(dialog_buffer, GtkTextBuffer);
 ikb_t   *g_ikb_db = NULL;
 uint8_t  g_ikb_db_size = 0;
 uint8_t  g_active_ikb_id = 0;
-char    *client_version_g = "0.5.0-alpha";
-
+uint8_t  g_chip_cut_bits = 0;
+char    *g_client_version = "0.6.0-alpha";
 
 
 /* Функція для завантаження зображення у буфер даних */
@@ -139,7 +139,7 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
     memcpy(noised_code_p, code_p, code_size);
 
     noise_level = (uint32_t)gtk_spin_button_get_value_as_int(noise_spin_button);
-    noised_code_size_in_bits = ((code_size * BITS_IN_BYTE) / g_ikb_db[g_active_ikb_id].enc_table.code_len_bits) * g_ikb_db[g_active_ikb_id].enc_table.code_len_bits;
+    noised_code_size_in_bits = ((code_size * BITS_IN_BYTE) / g_ikb_db[g_active_ikb_id].enc_table.cutted_len_bits) * g_ikb_db[g_active_ikb_id].enc_table.cutted_len_bits;
 
     status = ikb_noise_apply(noise_level, noised_code_size_in_bits, noised_code_p);
     if (CHECK_STATUS_FAIL(status)) {
@@ -220,6 +220,61 @@ exit:
     if (buffer_p != NULL) {
         free(buffer_p);
     }
+
+    return;
+}
+
+/* Функція оновлює значення панелі властивостей ІКВ */
+void update_values_panel()
+{
+    gchararray buffer = NULL;
+
+    /* Виділимо тимчасовий буфер */
+    buffer = calloc(1, 50);
+
+    sprintf(buffer, "Довжина чіпа: %d біт", g_ikb_db[g_active_ikb_id].enc_table.cutted_len_bits);
+    gtk_label_set_text(chip_bits_label, buffer);
+
+    sprintf(buffer, "Кодувальна здатність: %d біт", g_ikb_db[g_active_ikb_id].enc_table.encode_ability);
+    gtk_label_set_text(bits_enc_ability_label, buffer);
+
+    sprintf(buffer, "Надлишковість: %d %%", (int)(((float)g_ikb_db[g_active_ikb_id].enc_table.cutted_len_bits / g_ikb_db[g_active_ikb_id].enc_table.encode_ability) * 100));
+    gtk_label_set_text(code_redund_label, buffer);
+
+    sprintf(buffer, "Невикористано: %d кодів", (int)(g_ikb_db[g_active_ikb_id].enc_table.codes_num - pow(2, g_ikb_db[g_active_ikb_id].enc_table.encode_ability)));
+    gtk_label_set_text(bits_unused_label, buffer);
+
+    sprintf(buffer, "Помилок (знайд.): %d біт", g_ikb_db[g_active_ikb_id].err_found);
+    gtk_label_set_text(err_found_label, buffer);
+
+    sprintf(buffer, "Помилок (випр.): %d біт", g_ikb_db[g_active_ikb_id].err_fixed);
+    gtk_label_set_text(err_fixed_label, buffer);
+
+    /* Звільнимо тимчасовий буфер */
+    free(buffer);
+}
+
+/* Функція оновлення довжини обрізання чіпів */
+void update_chip_cut_length(GtkWidget *widget, gpointer window)
+{
+    uint8_t cut_value = 0;
+
+    cut_value = gtk_spin_button_get_value_as_int(cut_spin_button);
+    if (cut_value >= g_ikb_db[g_active_ikb_id].enc_table.code_len_bits) {
+        /* Найменший допустимий розмір чіпу - 1 біт */
+        cut_value = g_ikb_db[g_active_ikb_id].enc_table.code_len_bits - 1;
+        gtk_spin_button_set_value(cut_spin_button, cut_value);
+    }
+
+    /* Зберігаємо кількість обрізаних бітів у глобальній змінній */
+    g_chip_cut_bits = cut_value;
+
+    /* Врахуємо параметри обрізання чіпів */
+    g_ikb_db[g_active_ikb_id].enc_table.cutted_len_bits = g_ikb_db[g_active_ikb_id].enc_table.code_len_bits - g_chip_cut_bits;
+    g_ikb_db[g_active_ikb_id].enc_table.cutted_len_bytes = g_ikb_db[g_active_ikb_id].enc_table.cutted_len_bits / BITS_IN_BYTE + 1;
+
+    /* Оновимо панель параметрів ІКВ */
+    update_values_panel();
 
     return;
 }
@@ -315,7 +370,6 @@ void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
 
         sprintf(rx_msg_buffer, "%s%c", rx_msg_buffer, '\0');
         sprintf(rx_msg_buffer, "%s\n <РОЗКД> %s", rx_msg_buffer, message_p);
-        g_printf("Setting buffer to tx_buffer [%p] of %lu bytes\n", rx_buffer, strlen(rx_msg_buffer));
         g_printf("MSG: %s\n", rx_msg_buffer);
         data->message_p = g_strdup_printf("%s", rx_msg_buffer);
     }
@@ -363,6 +417,7 @@ void quick_message (GtkWindow *parent, gchar *message)
     gtk_widget_show_all (dialog);
 }
 
+/* Функція */
 status_code_t enc_table_set(ikb_t *ikb_p)
 {
     status_code_t status = SC_OK;
@@ -401,37 +456,18 @@ exit:
     return status;
 }
 
+/* Функція */
 void ikb_changed_cb(GtkWidget *widget, gpointer window)
 {
-    gchararray buffer = NULL;
-
     /* Update active IKB */
     g_active_ikb_id = gtk_combo_box_get_active(ikb_combo);
     g_printf("ІКВ змінено: %d \"%s\".\n", g_active_ikb_id, g_ikb_db[g_active_ikb_id].seq_str);
 
-    /* Allocate the buffer */
-    buffer = calloc(1, 50);
-
-    sprintf(buffer, "Довжина чіпа: %d біт", g_ikb_db[g_active_ikb_id].enc_table.code_len_bits);
-    gtk_label_set_text(chip_bits_label, buffer);
-
-    sprintf(buffer, "Кодувальна здатність: %d біт", g_ikb_db[g_active_ikb_id].enc_table.encode_ability);
-    gtk_label_set_text(bits_enc_ability_label, buffer);
-
-    sprintf(buffer, "Надлишковість: %d %%", (int)(((float)g_ikb_db[g_active_ikb_id].enc_table.code_len_bits / g_ikb_db[g_active_ikb_id].enc_table.encode_ability) * 100));
-    gtk_label_set_text(code_redund_label, buffer);
-
-    sprintf(buffer, "Невикористано: %d кодів", (int)(g_ikb_db[g_active_ikb_id].enc_table.codes_num - pow(2, g_ikb_db[g_active_ikb_id].enc_table.encode_ability)));
-    gtk_label_set_text(bits_unused_label, buffer);
-
-    sprintf(buffer, "Помилок (знайд.): %d біт", g_ikb_db[g_active_ikb_id].err_found);
-    gtk_label_set_text(err_found_label, buffer);
-
-    sprintf(buffer, "Помилок (випр.): %d біт", g_ikb_db[g_active_ikb_id].err_fixed);
-    gtk_label_set_text(err_fixed_label, buffer);
-
+    /* Оновимо кількість обрізаних бітів відповідно до можливостей ІКВ */
+    update_chip_cut_length(NULL, NULL);
 }
 
+/* Функція */
 void show_enc_table_cb(GtkWidget *widget, gpointer window)
 {
     status_code_t status = SC_OK;
@@ -467,6 +503,7 @@ exit:
     return;
 }
 
+/* Функція */
 status_code_t validate_arguments(int argc, char *argv[])
 {
     status_code_t status = SC_OK;
@@ -484,6 +521,7 @@ exit:
     return status;
 }
 
+/* Функція */
 status_code_t ikb_codes_init()
 {
     status_code_t status = SC_OK;
@@ -531,6 +569,7 @@ exit:
     return status;
 }
 
+/* Функція */
 status_code_t gui_init(int32_t client_id)
 {
     int  i = 0;
@@ -538,7 +577,7 @@ status_code_t gui_init(int32_t client_id)
 
     /* Створюємо та налаштовуємо головне вікно */
     window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    sprintf(window_name, "IKB Noise Protection v.%s - Client #%d", client_version_g, client_id);
+    sprintf(window_name, "IKB Noise Protection v.%s - Client #%d", g_client_version, client_id);
     gtk_window_set_title(GTK_WINDOW(window), window_name);
     gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
     gtk_window_set_default_size(GTK_WINDOW(window), 600, 800);
@@ -719,6 +758,7 @@ status_code_t gui_init(int32_t client_id)
 
     /* Приєднауємо події */
     g_signal_connect(ikb_combo, "changed", G_CALLBACK(ikb_changed_cb), NULL);
+    g_signal_connect(cut_spin_button, "changed", G_CALLBACK(update_chip_cut_length), NULL);
     g_signal_connect(enc_table_button, "clicked", G_CALLBACK(show_enc_table_cb), NULL);
     g_signal_connect(msg_entry, "changed", G_CALLBACK(update_msg_data_cb), NULL);
     g_signal_connect(msg_send_button, "clicked", G_CALLBACK(send_msg_cb), NULL);
@@ -727,6 +767,7 @@ status_code_t gui_init(int32_t client_id)
     return SC_OK;
 }
 
+/* Функція */
 status_code_t client_init(int argc, char *argv[])
 {
     status_code_t status = SC_OK;
@@ -782,6 +823,7 @@ exit:
     return status;
 }
 
+/* Функція */
 void bin_macro_test()
 {
     g_printf(" BIN8_TEST  |   0: " BIN8_FORMAT "\n", BIN8_NUMBER(0));
@@ -800,6 +842,7 @@ void bin_macro_test()
     g_printf(" BIN16_TEST |  18: " BIN16_FORMAT "\n", BIN16_NUMBER(18));
 }
 
+/* Функція */
 void __attribute__ ((destructor)) client_deinit()
 {
     status_code_t status = SC_OK;

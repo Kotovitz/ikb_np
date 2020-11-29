@@ -44,11 +44,13 @@
 
 
 typedef struct ikb_enc_table {
-    uint8_t   codes_num;       /* Кількість кодів у таблиці */
-    uint8_t   encode_ability;  /* Кількість бітів, що може бути закодована ІКВ */
-    uint8_t   code_len_bits;   /* Довжина кодів у бітах */
-    uint8_t   code_len_bytes;  /* Розмір буфера коду у байтах */
-    uint8_t **codes;           /* Коди у вигляді масивів чисел uint8_t */
+    uint8_t   codes_num;        /* Кількість кодів у таблиці */
+    uint8_t   encode_ability;   /* Кількість бітів, що може бути закодована ІКВ */
+    uint8_t   code_len_bits;    /* Довжина кодів у бітах */
+    uint8_t   code_len_bytes;   /* Розмір буфера коду у байтах */
+    uint8_t   cutted_len_bits;  /* Довжина обрізаних кодів у бітах */
+    uint8_t   cutted_len_bytes; /* Довжина буфера обрізаного коду у байтах */
+    uint8_t **codes;            /* Коди у вигляді масивів чисел uint8_t */
 } ikb_enc_table_t;
 
 typedef struct ikb {
