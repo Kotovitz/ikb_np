@@ -16,6 +16,7 @@
 #define MAX_IKB_SEQ_SIZE 30
 #define BITS_IN_BYTE 8
 #define ALPHABET_LEN 256  /* ASCII chars */
+#define BITS_NOISE_PROB 10 /* Bits noise probability 1/N */
 
 
 #define BIN8_FORMAT "%d%d%d%d%d%d%d%d"
@@ -40,6 +41,7 @@
 #define BIN32_NUMBER(number) \
         BIN16_NUMBER(((number >> 16) & 0xffff)), \
         BIN16_NUMBER((number & 0xffff))
+
 
 typedef struct ikb_enc_table {
     uint8_t   codes_num;       /* Кількість кодів у таблиці */
@@ -72,18 +74,14 @@ typedef struct rx_update {
 status_code_t ikb_init(uint8_t seq_len, const uint8_t *seq_p, ikb_t *ikb_p);
 status_code_t ikb_deinit(ikb_t *ikb_p);
 
-status_code_t ikb_encode(const ikb_t *ikb_p,
-                         uint8_t msg_size, gchararray message,
+status_code_t ikb_encode(const ikb_t *ikb_p, uint8_t msg_size, gchararray message,
                          uint32_t *code_size_p, gchararray code_seq);
-status_code_t ikb_decode(const ikb_t *ikb_p,
-                         uint32_t code_size, gchararray code_seq,
+status_code_t ikb_decode(const ikb_t *ikb_p, uint32_t code_size, gchararray code_seq,
                          uint8_t *msg_size_p, gchararray message);
 
-status_code_t ikb_code_to_str(uint32_t code_size, gchararray code_seq,
-                              uint32_t *msg_size, gchararray message);
-
+status_code_t ikb_noise_apply(uint32_t noised_bits, uint32_t code_size_in_bits, gchararray code_seq);
+status_code_t ikb_noise_restore(const ikb_t *ikb_p, uint32_t code_size, uint8_t *code_seq);
 status_code_t ikb_seq_get_str_size(const ikb_t *ikb_p, uint8_t *buf_size);
-
 status_code_t ikb_seq_to_str(const ikb_t *ikb_p, uint8_t buf_size, gchararray buffer);
 
 

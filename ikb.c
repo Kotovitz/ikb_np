@@ -1,5 +1,7 @@
-#include "ikb.h"
+#include <stdlib.h>
+#include <time.h>
 
+#include "ikb.h"
 
 
 /* [function] bits_encode_ability()
@@ -173,8 +175,7 @@ exit:
  *
  * ----------------------------------------------------------------------------
  */
-status_code_t ikb_encode(const ikb_t *ikb_p,
-                         uint8_t msg_size, gchararray message,
+status_code_t ikb_encode(const ikb_t *ikb_p, uint8_t msg_size, gchararray message,
                          uint32_t *code_size_p, gchararray code_seq)
 {
     status_code_t status = SC_OK;
@@ -280,8 +281,7 @@ exit:
 }
 
 
-status_code_t ikb_decode(const ikb_t *ikb_p,
-                         uint32_t code_size, gchararray code_seq,
+status_code_t ikb_decode(const ikb_t *ikb_p, uint32_t code_size, gchararray code_seq,
                          uint8_t *msg_size_p, gchararray message)
 {
     status_code_t status = SC_OK;
@@ -382,14 +382,27 @@ status_code_t ikb_decode(const ikb_t *ikb_p,
             }
 
             if (chip_unit == -1) {
-                /* */
-                g_printf("Помилка декодування чіпа:\n");
+                bool_t is_zeroed = TRUE;
                 for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
-                    g_printf(" " BIN8_FORMAT, BIN8_NUMBER(chip_code_p[i]));
+                    if (0 != chip_code_p[i]) {
+                        is_zeroed = FALSE;
+                        break;
+                    }
                 }
-                g_printf("\n");
-                status = SC_UNKNOWN_ERROR;
-                goto exit;
+
+                /* Fail if buffer not zeroed */
+                if (FALSE == is_zeroed) {
+                    g_printf("Помилка декодування чіпа:\n");
+                    for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
+                        g_printf(" " BIN8_FORMAT, BIN8_NUMBER(chip_code_p[i]));
+                    }
+                    g_printf("\n");
+                    status = SC_FLOW_FAILED;
+                    goto exit;
+                } else {
+                    chip_unit = 0x0;
+                }
+
             }
 
             // Step 3. Compound MSG by encoding units.
@@ -429,14 +442,191 @@ exit:
 }
 
 
-status_code_t ikb_code_to_str(uint32_t code_size, gchararray code_seq,
-                              uint32_t *msg_size, gchararray message)
+uint8_t reverse_bit_in_byte(uint8_t byte, uint8_t bit_position)
 {
-    status_code_t status = SC_FLOW_UNSUPPORTED;
+    uint8_t bit_value = (0x80 >> (bit_position % BITS_IN_BYTE)) & byte;
 
-    goto exit;
+    if (0 == bit_value) {
+        /* Bit value should become 1 */
+        byte |= 0x80 >> (bit_position % BITS_IN_BYTE);
+    } else {
+        /* Bit value should become 0 */
+        byte &= ~(0x80 >> (bit_position % BITS_IN_BYTE));
+    }
+
+    return byte;
+}
+
+status_code_t ikb_noise_apply(uint32_t noised_bits, uint32_t code_size_in_bits, gchararray code_seq)
+{
+    status_code_t status = SC_OK;
+    uint32_t      bit_idx = 0;
+    uint32_t      noise_applied = 0;
+    bool_t        is_noised_bit = FALSE;
+    uint32_t      noise_value = 0;
+
+    srand(time(NULL));
+
+    if (noised_bits == 0) {
+        goto exit;
+    }
+
+    g_printf("code_size_in_bits: %d\n", code_size_in_bits);
+    for (bit_idx = 0; bit_idx < code_size_in_bits; bit_idx++) {
+        noise_value = rand() % BITS_NOISE_PROB;
+        is_noised_bit = (noise_value == 0) ? TRUE : FALSE;
+
+        if (is_noised_bit) {
+            g_print("Noised %d bit in " BIN8_FORMAT " \n", bit_idx, BIN8_NUMBER(code_seq[bit_idx / BITS_IN_BYTE]));
+            code_seq[bit_idx / BITS_IN_BYTE] = reverse_bit_in_byte(code_seq[bit_idx / BITS_IN_BYTE], bit_idx);
+            g_printf("Noised byte: " BIN8_FORMAT "\n", BIN8_NUMBER(code_seq[bit_idx / BITS_IN_BYTE]));
+            noise_applied++;
+        }
+
+        if (noise_applied >= noised_bits) {
+            break;
+        }
+    }
+    g_print("Noised applied to %d bits.\n", noise_applied);
 
 exit:
+    return status;
+}
+
+status_code_t ikb_noise_restore(const ikb_t *ikb_p, uint32_t code_size, uint8_t *code_seq)
+{
+    status_code_t status = SC_OK;
+    uint32_t      chips_num = 0;  /* number of chips used by message */
+    uint8_t       chip_id = 0; /* Chip index */
+    uint32_t      chip_bit_i = 0; /* Bit iterator over the chips buffer */
+    uint8_t      *chip_code_p = NULL;
+    uint32_t      i = 0;
+
+    /* Check if IKB can be used for encoding */
+    if (ikb_p->enc_table.encode_ability == 0) {
+        g_printf("Неможливо відновити дані обраною ІКВ.\n");
+        status = SC_PARAM_VALUE_INVALID;
+        goto exit;
+    }
+
+    g_printf("Відновлення даних буфера (%d байт): %s", code_size, code_seq);
+    uint32_t j = 0;
+    for (j = 0; j < code_size; j++) {
+        g_printf(" " BIN8_FORMAT, BIN8_NUMBER(code_seq[j]));
+    }
+    g_printf("\n");
+
+    /* Calculate number of chips needed to encode the data */
+    chips_num = (code_size * BITS_IN_BYTE) / ikb_p->enc_table.code_len_bits + 1;
+
+    /* Allocate temporary code buffer */
+    chip_code_p = calloc(1, ikb_p->enc_table.code_len_bytes);
+
+    /* Restore the code using IKB encoding table */
+    for (chip_id = 0; chip_id < chips_num; chip_id++) {
+        // Step 0. Initialization.
+        memset(chip_code_p, 0, ikb_p->enc_table.code_len_bytes);
+
+        // Step 1. Copy the code sequence to the buffer.
+        uint32_t code_bit_start = chip_id * ikb_p->enc_table.code_len_bits;
+        uint32_t code_bit_end = code_bit_start + ikb_p->enc_table.code_len_bits;
+        uint8_t code_bit_value = 0;
+        uint8_t chip_bit_value = 0;
+        uint8_t code_bit_mask = 0;
+        uint8_t chip_bit_mask = 0;
+
+        /* Cut the maximum end bit */
+        code_bit_end = (code_bit_end < (code_size * BITS_IN_BYTE)) ? code_bit_end : (code_size * BITS_IN_BYTE);
+
+        g_printf("Межі коду від %d до %d байту.\n", code_bit_start, code_bit_end);
+        for (chip_bit_i = code_bit_start; chip_bit_i < code_bit_end; chip_bit_i++) {
+            code_bit_mask = 0x80 >> (chip_bit_i % BITS_IN_BYTE);
+            code_bit_value = (code_seq[chip_bit_i / BITS_IN_BYTE] & code_bit_mask) ? 1 : 0;
+
+            if (code_bit_value) {
+                chip_code_p[(chip_bit_i - code_bit_start) / BITS_IN_BYTE] |= (0x80 >> ((chip_bit_i - code_bit_start) % BITS_IN_BYTE));
+            }
+            g_printf(" BitMask: " BIN8_FORMAT "; BitValue: %d; ChipBit: %d;\n", BIN8_NUMBER(code_bit_mask), code_bit_value, chip_bit_i);
+        }
+
+        // Step 2. Get the encoding unit for the code sequence.
+        int8_t chip_unit = -1;
+        uint8_t code_id = 0;
+        uint8_t missed_bits = 0;
+        uint8_t best_chip_miss = ikb_p->enc_table.code_len_bits;
+
+        for (code_id = 0; code_id < ikb_p->enc_table.codes_num; code_id++) {
+            missed_bits = 0;
+            /* Порівняємо всі біти коду */
+            for (i = 0; i < ikb_p->enc_table.code_len_bits; i++) {
+                code_bit_value = ikb_p->enc_table.codes[code_id][i / BITS_IN_BYTE] & (0x80 >> (i % BITS_IN_BYTE));
+                chip_bit_value = chip_code_p[i / BITS_IN_BYTE] & (0x80 >> (i % BITS_IN_BYTE));
+
+                if (code_bit_value != chip_bit_value) {
+                    missed_bits++;
+                }
+            }
+
+            /* Якщо коди однакові, ми виходимо */
+            if (missed_bits < best_chip_miss) {
+                best_chip_miss = missed_bits;
+                chip_unit = code_id;
+            }
+            g_printf("missed_bits: %d; best_chip_miss: %d; chip_unit: %d;\n", missed_bits, best_chip_miss, chip_unit);
+        }
+
+
+        if (best_chip_miss <= ikb_p->err_fixed) {
+            /* Кількість помилок допускає відновлення */
+            for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
+                chip_code_p[i] = ikb_p->enc_table.codes[chip_unit][i];
+            }
+            g_printf("Відновлено %d пошкодених бітів.\n", best_chip_miss);
+
+        } else {
+            if (best_chip_miss <= ikb_p->err_found) {
+                /* Кількість помилок не дозволяє відновити повідомлення */
+                g_printf("Знайдено %d пошкодених бітів.\n", best_chip_miss);
+
+            } else {
+                /* Неможливо визначити кількість помилок */
+                g_printf("Неможливо відновити пошкоджений код:");
+                for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
+                    g_printf(" " BIN8_FORMAT, BIN8_NUMBER(chip_code_p[i]));
+                }
+                g_printf("\n");
+            }
+
+            /* Set zeroed chip buffer */
+            for (i = 0; i < ikb_p->enc_table.code_len_bytes; i++) {
+                chip_code_p[i] = 0;
+            }
+        }
+
+        /* Copy final buffer */
+        for (chip_bit_i = code_bit_start; chip_bit_i < code_bit_end; chip_bit_i++) {
+            code_bit_mask = 0x80 >> (chip_bit_i % BITS_IN_BYTE);
+            code_bit_value = (code_seq[chip_bit_i / BITS_IN_BYTE] & code_bit_mask) ? 1 : 0;
+
+            chip_bit_mask = 0x80 >> ((chip_bit_i - code_bit_start) % BITS_IN_BYTE);
+            chip_bit_value = (chip_code_p[(chip_bit_i - code_bit_start) / BITS_IN_BYTE] & chip_bit_mask) ? 1 : 0;
+
+            if (code_bit_value != chip_bit_value) {
+                if (chip_bit_value == 1) {
+                    code_seq[chip_bit_i / BITS_IN_BYTE] |= code_bit_mask;
+                } else {
+                    code_seq[chip_bit_i / BITS_IN_BYTE] &= ~code_bit_mask;
+                }
+            }
+            g_printf(" CodeBitMask: " BIN8_FORMAT "; ChipBitMask: " BIN8_FORMAT "; Fixed: %s;\n", BIN8_NUMBER(code_bit_mask), BIN8_NUMBER(chip_bit_mask), code_bit_value != chip_bit_value ? "yes" : "no");
+        }
+    }
+
+exit:
+    if (chip_code_p != NULL) {
+        free(chip_code_p);
+    }
+
     return status;
 }
 

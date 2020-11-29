@@ -8,6 +8,10 @@
 #include "channel.h"
 
 
+#define MAX_MESSAGE_SIZE (256) /* 256 bytes */
+#define FRAME_LABEL_XPOS 0.05  /* Frame label alignment on horizontal axis */
+#define FRAME_LABEL_YPOS 0.5   /* Frame label alignment on vertical axis */
+
 /* Оголошуємо основні елементи вікна */
 #define GUI_ELEMENT_P(name, type) type *name = NULL
 
@@ -73,9 +77,9 @@ GUI_ELEMENT_P(dialog_buffer, GtkTextBuffer);
 ikb_t   *g_ikb_db = NULL;
 uint8_t  g_ikb_db_size = 0;
 uint8_t  g_active_ikb_id = 0;
+char    *client_version_g = "0.5.0-alpha";
 
 
-#define MAX_MESSAGE_SIZE (256)     /* 256 bytes */
 
 /* Функція для завантаження зображення у буфер даних */
 GdkPixbuf * create_pixbuf(const gchar * filepath)
@@ -100,8 +104,12 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
     uint8_t       buffer_size = 0;
     gchararray    code_p = NULL;
     uint32_t      code_size = 0;
+    gchararray    noised_code_p = NULL;
+    uint32_t      noise_level = 0;
+    uint32_t      noised_code_size_in_bits = 0;
     gchararray    tx_msg_buffer = NULL;
     uint32_t      tx_msg_size = 0;
+    uint32_t      i = 0;
 
     /* Копіюємо дані з рядку вводу до буфера */
     buffer_size = strlen(gtk_entry_get_text((GtkEntry *)msg_entry));
@@ -119,6 +127,7 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
 
     /* Виділимо необхідний буфер коду та закодуємо вхідне повідомлення */
     code_p = calloc(1, code_size);
+    noised_code_p = calloc(1, code_size);
 
     status = ikb_encode(&g_ikb_db[g_active_ikb_id], buffer_size, buffer_p, &code_size, code_p);
     if (CHECK_STATUS_FAIL(status)) {
@@ -126,20 +135,38 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
         goto exit;
     }
 
+    /* Copy coded buffer to noised code buffer */
+    memcpy(noised_code_p, code_p, code_size);
+
+    noise_level = (uint32_t)gtk_spin_button_get_value_as_int(noise_spin_button);
+    noised_code_size_in_bits = ((code_size * BITS_IN_BYTE) / g_ikb_db[g_active_ikb_id].enc_table.code_len_bits) * g_ikb_db[g_active_ikb_id].enc_table.code_len_bits;
+
+    status = ikb_noise_apply(noise_level, noised_code_size_in_bits, noised_code_p);
+    if (CHECK_STATUS_FAIL(status)) {
+        g_printf("Помилка накладання завад: %s", status_get_str(status));
+        goto exit;
+    }
+
     /* Виведемо надіслані дані у вікно користувача */
     if (buffer_p) {
-        tx_msg_size = buffer_size + (code_size * BITS_IN_BYTE) + 1000;
+        tx_msg_size = buffer_size + (code_size * 20) + 1000;
         tx_msg_buffer = calloc(1, tx_msg_size);
 
-        sprintf(tx_msg_buffer, " <Надіслано> %s", buffer_p);
-        sprintf(tx_msg_buffer, "%s\n <Закодовано>", tx_msg_buffer);
+        sprintf(tx_msg_buffer, " <ПОВІД> %s", buffer_p);
 
-        uint32_t i = 0;
+        sprintf(tx_msg_buffer, "%s\n <ЗАКОД>", tx_msg_buffer);
         for (i = 0; i < code_size; i++) {
             sprintf(tx_msg_buffer, "%s " BIN8_FORMAT, tx_msg_buffer, BIN8_NUMBER(code_p[i]));
         }
         sprintf(tx_msg_buffer, "%s%c", tx_msg_buffer, '\0');
-        channel_write(-1, code_size, (uint8_t *)code_p);
+
+        sprintf(tx_msg_buffer, "%s\n <ЗАВАД>", tx_msg_buffer);
+        for (i = 0; i < code_size; i++) {
+            sprintf(tx_msg_buffer, "%s " BIN8_FORMAT, tx_msg_buffer, BIN8_NUMBER(noised_code_p[i]));
+        }
+        sprintf(tx_msg_buffer, "%s%c", tx_msg_buffer, '\0');
+
+        channel_write(-1, code_size, (uint8_t *)noised_code_p);
         //g_printf("MSG: %s\n", tx_msg_buffer);
 
         tx_buffer = gtk_text_view_get_buffer(tx_text_view);
@@ -157,8 +184,21 @@ void send_msg_cb(GtkWidget *widget, gpointer window)
 
 
 exit:
-    free(tx_msg_buffer);
-    free(buffer_p);
+    if (tx_msg_buffer != NULL) {
+        free(tx_msg_buffer);
+    }
+
+    if (code_p != NULL) {
+        free(code_p);
+    }
+
+    if (noised_code_p != NULL) {
+        free(noised_code_p);
+    }
+
+    if (buffer_p != NULL) {
+        free(buffer_p);
+    }
 
     return;
 }
@@ -173,10 +213,14 @@ void update_msg_data_cb(GtkWidget *widget, gpointer window)
         goto exit;
     }
 
-    sprintf(buffer_p, "Знаків використано: %3lu", strlen(gtk_entry_get_text((GtkEntry *)msg_entry)));
+    sprintf(buffer_p, "Знаків використано: %3lu / %d", strlen(gtk_entry_get_text((GtkEntry *)msg_entry)), MAX_MESSAGE_SIZE);
     gtk_label_set_text(msg_len_label, buffer_p);
 
 exit:
+    if (buffer_p != NULL) {
+        free(buffer_p);
+    }
+
     return;
 }
 
@@ -196,63 +240,102 @@ void rx_reader(uint16_t buffer_size, uint8_t *buffer_p)
 {
     status_code_t status = SC_OK;
     uint32_t      i = 0;
+    uint8_t      *restored_buffer_p = NULL;
     gchararray    message_p = NULL;
     uint8_t       message_size = 0;
     uint32_t      rx_msg_size = 0;
     gchararray    rx_msg_buffer = NULL;
     rx_update_t  *data = g_new0(rx_update_t, 1);
 
+    /* Виведення отриманого буфера даних */
     g_printf("Отримано буфер даних розміром %d байт:\n", buffer_size);
     for (i = 0; i < buffer_size; i++) {
         g_printf(" " BIN8_FORMAT, BIN8_NUMBER(buffer_p[i]));
     }
     g_printf("\n");
 
-    /* Decode buffer accordingly to active IKB */
-    status = ikb_decode(&g_ikb_db[g_active_ikb_id], buffer_size, (gchararray)buffer_p, &message_size, NULL);
+    /* Встановлення вказівника на буфер отриманих даних */
+    data->buffer_p = gtk_text_view_get_buffer(rx_text_view);
+
+    /* Buffer used for restored data */
+    restored_buffer_p = calloc(1, buffer_size);
+    if (restored_buffer_p == NULL) {
+        status = SC_NO_FREE_MEMORY;
+        data->message_p = g_strdup_printf("Помилка виділення пам'яті для буфера відновлення: %s\n", status_get_str(status));
+        g_printf("%s", data->message_p);
+        goto exit;
+    }
+    memcpy(restored_buffer_p, buffer_p, buffer_size);
+
+    /* Buffer restoration */
+    status = ikb_noise_restore(&g_ikb_db[g_active_ikb_id], buffer_size, restored_buffer_p);
     if (CHECK_STATUS_FAIL(status)) {
-        g_printf("Помилка отримання розміру повідомлення: %s\n", status_get_str(status));
+        data->message_p = g_strdup_printf("Помилка відновлення даних: %s\n", status_get_str(status));
+        g_printf("%s", data->message_p);
+        goto exit;
+    }
+
+    /* Decode buffer accordingly to active IKB */
+    status = ikb_decode(&g_ikb_db[g_active_ikb_id], buffer_size, (gchararray)restored_buffer_p, &message_size, NULL);
+    if (CHECK_STATUS_FAIL(status)) {
+        data->message_p = g_strdup_printf("Помилка отримання розміру повідомлення: %s\n", status_get_str(status));
+        g_printf("%s", data->message_p);
         goto exit;
     }
 
     message_p = calloc(1, message_size + 1);
     if (message_p == NULL) {
         status = SC_NO_FREE_MEMORY;
-        g_printf("Помилка виділення пам'яті для повідомлення: %s\n", status_get_str(status));
+        data->message_p = g_strdup_printf("Помилка виділення пам'яті для повідомлення: %s\n", status_get_str(status));
+        g_printf("%s", data->message_p);
         goto exit;
     }
 
-    status = ikb_decode(&g_ikb_db[g_active_ikb_id], buffer_size, (gchararray)buffer_p, &message_size, message_p);
+    status = ikb_decode(&g_ikb_db[g_active_ikb_id], buffer_size, (gchararray)restored_buffer_p, &message_size, message_p);
     if (CHECK_STATUS_FAIL(status)) {
-        g_printf("Помилка отримання повідомлення: %s\n", status_get_str(status));
+        data->message_p = g_strdup_printf("Помилка декодування повідомлення: %s\n", status_get_str(status));
+        g_printf("%s", data->message_p);
         goto exit;
     }
 
     /* Виведемо отримані дані у вікно користувача */
     if (buffer_p) {
-        rx_msg_size = buffer_size + message_size + 1000;
+        rx_msg_size = (buffer_size * 20) + message_size + 10000;
         rx_msg_buffer = calloc(1, rx_msg_size);
 
-        sprintf(rx_msg_buffer, " <Отримано>");
+        sprintf(rx_msg_buffer, " <ОТРИМ>");
         for (i = 0; i < buffer_size; i++) {
             sprintf(rx_msg_buffer, "%s " BIN8_FORMAT, rx_msg_buffer, BIN8_NUMBER(buffer_p[i]));
         }
+
+        sprintf(rx_msg_buffer, "%s\n <ВІДНВ>", rx_msg_buffer);
+        for (i = 0; i < buffer_size; i++) {
+            sprintf(rx_msg_buffer, "%s " BIN8_FORMAT, rx_msg_buffer, BIN8_NUMBER(restored_buffer_p[i]));
+        }
+
         sprintf(rx_msg_buffer, "%s%c", rx_msg_buffer, '\0');
-        sprintf(rx_msg_buffer, "%s\n <Розкодовано> %s", rx_msg_buffer, message_p);
-        //g_printf("MSG: %s\n", rx_msg_buffer);
-
-        //Invalid code: rx_buffer = gtk_text_view_get_buffer(rx_text_view);
-        //g_printf("Setting buffer to tx_buffer [%p] of %lu bytes\n", tx_buffer, strlen(rx_msg_buffer));
-        //Invalid code: gtk_text_buffer_set_text(rx_buffer, rx_msg_buffer, strlen(rx_msg_buffer));
-
+        sprintf(rx_msg_buffer, "%s\n <РОЗКД> %s", rx_msg_buffer, message_p);
+        g_printf("Setting buffer to tx_buffer [%p] of %lu bytes\n", rx_buffer, strlen(rx_msg_buffer));
+        g_printf("MSG: %s\n", rx_msg_buffer);
         data->message_p = g_strdup_printf("%s", rx_msg_buffer);
-        data->buffer_p = gtk_text_view_get_buffer(rx_text_view);;
-        gdk_threads_add_idle(rx_buffer_update, data);
     }
 
+    gdk_threads_add_idle(rx_buffer_update, data);
     g_printf("Отримано.\n");
 
 exit:
+    if (restored_buffer_p != NULL) {
+        free(restored_buffer_p);
+    }
+
+    if (rx_msg_buffer != NULL) {
+        free(rx_msg_buffer);
+    }
+
+    if (message_p != NULL) {
+        free(message_p);
+    }
+
     return;
 }
 
@@ -451,11 +534,11 @@ exit:
 status_code_t gui_init(int32_t client_id)
 {
     int  i = 0;
-    char window_name[50] = {0};
+    char window_name[100] = {0};
 
     /* Створюємо та налаштовуємо головне вікно */
     window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    sprintf(window_name, "IKB Noise Protection - Client #%d", client_id);
+    sprintf(window_name, "IKB Noise Protection v.%s - Client #%d", client_version_g, client_id);
     gtk_window_set_title(GTK_WINDOW(window), window_name);
     gtk_window_set_position(GTK_WINDOW(window), GTK_WIN_POS_CENTER);
     gtk_window_set_default_size(GTK_WINDOW(window), 600, 800);
@@ -470,6 +553,7 @@ status_code_t gui_init(int32_t client_id)
 
     /* Панель налаштувань */
     config_frame = GTK_FRAME(gtk_frame_new("Налаштування"));
+    gtk_frame_set_label_align(config_frame, FRAME_LABEL_XPOS, FRAME_LABEL_YPOS);
     config_layout = GTK_BOX(gtk_box_new(GTK_ORIENTATION_VERTICAL, 10));
     settings_layout = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10));
     gtk_container_set_border_width(GTK_CONTAINER(config_layout), 5);
@@ -553,6 +637,8 @@ status_code_t gui_init(int32_t client_id)
 
     /* Блок повідомлень */
     msg_send_frame = GTK_FRAME(gtk_frame_new("Повідомлення"));
+    gtk_frame_set_label_align(msg_send_frame, FRAME_LABEL_XPOS, FRAME_LABEL_YPOS);
+
     msg_send_layout = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10));
     gtk_container_set_border_width(GTK_CONTAINER(msg_send_layout), 5);
 
@@ -562,7 +648,7 @@ status_code_t gui_init(int32_t client_id)
     gtk_widget_set_hexpand(GTK_WIDGET(msg_entry), TRUE);
     gtk_container_add(GTK_CONTAINER(msg_layout), GTK_WIDGET(msg_entry));
 
-    msg_len_label = GTK_LABEL(gtk_label_new("Знаків використано: 0"));
+    msg_len_label = GTK_LABEL(gtk_label_new(g_strdup_printf("Знаків використано: 0 / %d", MAX_MESSAGE_SIZE)));
     gtk_label_set_xalign (msg_len_label, 0.01);
     gtk_container_add(GTK_CONTAINER(msg_layout), GTK_WIDGET(msg_len_label));
     gtk_container_add(GTK_CONTAINER(msg_send_layout), GTK_WIDGET(msg_layout));
@@ -583,6 +669,8 @@ status_code_t gui_init(int32_t client_id)
     rx_tx_layout = GTK_BOX(gtk_box_new(GTK_ORIENTATION_VERTICAL, 10));
 
     tx_frame = GTK_FRAME(gtk_frame_new("TX - Передавання"));
+    gtk_frame_set_label_align(tx_frame, FRAME_LABEL_XPOS, FRAME_LABEL_YPOS);
+
     tx_layout = GTK_BOX(gtk_box_new(GTK_ORIENTATION_VERTICAL, 10));
     gtk_container_set_border_width(GTK_CONTAINER(tx_layout), 5);
     tx_scrolled_window = GTK_SCROLLED_WINDOW(gtk_scrolled_window_new (NULL, NULL));
@@ -601,6 +689,8 @@ status_code_t gui_init(int32_t client_id)
     gtk_container_add(GTK_CONTAINER(rx_tx_layout), GTK_WIDGET(tx_frame));
 
     rx_frame = GTK_FRAME(gtk_frame_new("RX - Отримання"));
+    gtk_frame_set_label_align(rx_frame, FRAME_LABEL_XPOS, FRAME_LABEL_YPOS);
+
     rx_layout = GTK_BOX(gtk_box_new(GTK_ORIENTATION_VERTICAL, 10));
     gtk_container_set_border_width(GTK_CONTAINER(rx_layout), 5);
     rx_scrolled_window = GTK_SCROLLED_WINDOW(gtk_scrolled_window_new (NULL, NULL));

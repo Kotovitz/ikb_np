@@ -17,6 +17,7 @@ typedef enum status_code {
     SC_UNKNOWN_ERROR,                   /**< Operation has failed for unknown reason */
     SC_FLOW_UNSUPPORTED,                /**< Operation has failed because flow is unsupported */
     SC_FLOW_DEPRECATED,                 /**< Operation has failed because flow is deprecated */
+    SC_FLOW_FAILED,                     /**< Operation has failed because flow cannot be executed */
     SC_MODULE_UNINITIALIZED,            /**< Operation has failed because module is uninitialized */
     SC_MODULE_ALREADY_INITIALIZED,      /**< Operation has failed because module is already initialized */
     SC_PARAM_NULL,                      /**< Operation has failed because parameter is NULL pointer */
